@@ -7,12 +7,15 @@ from telegram.ext import (
     ContextTypes, ConversationHandler
 )
 
+# Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
+# Состояния
 (FIO, ADDRESS, FIO_ROD1, FIO_ROD2, PHONE, DOC1, DOC2, DOC3) = range(8)
 
+# Подключение к БД
 def get_connection():
     return psycopg2.connect(
         host=os.getenv("PG_HOST"),
@@ -22,29 +25,35 @@ def get_connection():
         dbname=os.getenv("PG_DATABASE")
     )
 
+# Создание таблицы PostgreSQL
 def create_table():
     with get_connection() as conn:
         with conn.cursor() as cur:
-            conn.execute('''
-            CREATE TABLE IF NOT EXISTS zayavki (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER,
-                fio TEXT,
-                address TEXT,
-                fio_rod1 TEXT,
-                fio_rod2 TEXT,
-                phone TEXT,
-                doc1 TEXT,
-                doc2 TEXT,
-                doc3 TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS zayavki (
+                    id SERIAL PRIMARY KEY,
+                    telegram_id BIGINT,
+                    fio TEXT,
+                    address TEXT,
+                    fio_rod1 TEXT,
+                    fio_rod2 TEXT,
+                    phone TEXT,
+                    doc1 TEXT,
+                    doc2 TEXT,
+                    doc3 TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+        conn.commit()
 
-def clean_old_data(days=3):
-    with sqlite3.connect("zayavki.db") as conn:
-        conn.execute(f"DELETE FROM zayavki WHERE timestamp < datetime('now', '-{days} days')")
+# Удаление старых заявок
+def clean_old_data(days=1):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM zayavki WHERE timestamp < NOW() - INTERVAL '{days} days'")
+        conn.commit()
 
+# Хендлеры Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите ваше ФИО:")
     return FIO
@@ -78,7 +87,7 @@ async def get_doc1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if doc and doc.mime_type == 'application/pdf':
         context.user_data["doc1"] = doc.file_id
-        await update.message.reply_text("Теперь отправьте PDF: справка ПНД")
+        await update.message.reply_text("Теперь отправьте PDF: справка Справка из психоневролгического диспансера")
         return DOC2
     await update.message.reply_text("Пожалуйста, отправьте PDF-файл удостоверения личности.")
     return DOC1
@@ -87,9 +96,9 @@ async def get_doc2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if doc and doc.mime_type == 'application/pdf':
         context.user_data["doc2"] = doc.file_id
-        await update.message.reply_text("Теперь отправьте PDF: справка НД")
+        await update.message.reply_text("Теперь отправьте PDF: справка  Справка из наркологического диспансера")
         return DOC3
-    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки ПНД.")
+    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки Справка из психоневролгического диспансера.")
     return DOC2
 
 async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,9 +118,10 @@ async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ''', (
                     user_id, data['fio'], data['address'], data['fio_rod1'], data['fio_rod2'],
                     data['phone'], data['doc1'], data['doc2'], data['doc3']
-            ))
-        conn.commit()
+                ))
+            conn.commit()
 
+        # Уведомление админа
         text = (
             f"Новая заявка:\n\n"
             f"ФИО: {data['fio']}\n"
@@ -120,7 +130,6 @@ async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Родственник 2: {data['fio_rod2']}\n"
             f"Телефон: {data['phone']}"
         )
-
         await context.bot.send_message(chat_id=ADMIN_ID, text=text)
         await context.bot.send_document(chat_id=ADMIN_ID, document=data['doc1'], caption="Удостоверение личности")
         await context.bot.send_document(chat_id=ADMIN_ID, document=data['doc2'], caption="Справка ПНД")
@@ -129,19 +138,14 @@ async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Все документы получены. Заявка отправлена.")
         return ConversationHandler.END
 
-    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки НД.")
+    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки  Справка из наркологического диспансера.")
     return DOC3
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Операция отменена.")
     return ConversationHandler.END
 
-def clean_old_data(days=1):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"DELETE FROM zayavki WHERE timestamp < NOW() - INTERVAL '{days} days'")
-        conn.commit()
-
+# Запуск бота
 if __name__ == '__main__':
     create_table()
     app = ApplicationBuilder().token(TOKEN).build()
