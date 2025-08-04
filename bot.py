@@ -1,26 +1,21 @@
-import sqlite3
+from dotenv import load_dotenv
 import os
-from telegram import Update, Document
+import sqlite3
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
     ContextTypes, ConversationHandler
 )
 
+# Загрузка переменных окружения
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+
 # Состояния
 (FIO, ADDRESS, FIO_ROD1, FIO_ROD2, PHONE, DOC1, DOC2, DOC3) = range(8)
 
-# Чтение переменных окружения
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-
-if ADMIN_ID:
-    try:
-        ADMIN_ID = int(ADMIN_ID)
-    except ValueError:
-        ADMIN_ID = None
-
-# Создание таблицы
-
+# Создание таблицы SQLite
 def create_table():
     with sqlite3.connect("zayavki.db") as conn:
         conn.execute('''
@@ -39,72 +34,62 @@ def create_table():
             )
         ''')
 
-
 def clean_old_data(days=3):
     with sqlite3.connect("zayavki.db") as conn:
         conn.execute(f"DELETE FROM zayavki WHERE timestamp < datetime('now', '-{days} days')")
 
-
-# Шаги опроса
+# Обработчики шагов
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите ваше ФИО:")
     return FIO
-
 
 async def get_fio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fio"] = update.message.text
     await update.message.reply_text("Введите адрес проживания:")
     return ADDRESS
 
-
 async def get_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["address"] = update.message.text
-    await update.message.reply_text("Введите ФИО и номер телефона родственника 1 (в одном сообщении):")
+    await update.message.reply_text("Введите ФИО и номер телефона родственника 1:")
     return FIO_ROD1
-
 
 async def get_fio_rod1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fio_rod1"] = update.message.text
-    await update.message.reply_text("Введите ФИО и номер телефона родственника 2 (в одном сообщении):")
+    await update.message.reply_text("Введите ФИО и номер телефона родственника 2:")
     return FIO_ROD2
-
 
 async def get_fio_rod2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["fio_rod2"] = update.message.text
-    await update.message.reply_text("Введите номер телефона:")
+    await update.message.reply_text("Введите ваш номер телефона:")
     return PHONE
-
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["phone"] = update.message.text
     await update.message.reply_text("Отправьте PDF: удостоверение личности")
     return DOC1
 
-
 async def get_doc1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    document = update.message.document
-    if document and document.mime_type == 'application/pdf':
-        context.user_data["doc1"] = document.file_id
-        await update.message.reply_text("Теперь отправьте PDF: справка из психоневрологического диспансера")
+    doc = update.message.document
+    if doc and doc.mime_type == 'application/pdf':
+        context.user_data["doc1"] = doc.file_id
+        await update.message.reply_text("Теперь отправьте PDF: справка ПНД")
         return DOC2
     await update.message.reply_text("Пожалуйста, отправьте PDF-файл удостоверения личности.")
     return DOC1
 
-
 async def get_doc2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    document = update.message.document
-    if document and document.mime_type == 'application/pdf':
-        context.user_data["doc2"] = document.file_id
-        await update.message.reply_text("Теперь отправьте PDF: справка из наркологического диспансера")
+    doc = update.message.document
+    if doc and doc.mime_type == 'application/pdf':
+        context.user_data["doc2"] = doc.file_id
+        await update.message.reply_text("Теперь отправьте PDF: справка НД")
         return DOC3
-    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки из психоневрологического диспансера.")
+    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки ПНД.")
     return DOC2
 
-
 async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    document = update.message.document
-    if document and document.mime_type == 'application/pdf':
-        context.user_data["doc3"] = document.file_id
+    doc = update.message.document
+    if doc and doc.mime_type == 'application/pdf':
+        context.user_data["doc3"] = doc.file_id
         clean_old_data()
 
         data = context.user_data
@@ -114,47 +99,38 @@ async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.execute('''
                 INSERT INTO zayavki (telegram_id, fio, address, fio_rod1, fio_rod2, phone, doc1, doc2, doc3)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, data['fio'], data['address'], data['fio_rod1'], data['fio_rod2'],
-                  data['phone'], data['doc1'], data['doc2'], data['doc3']))
+            ''', (
+                user_id, data['fio'], data['address'], data['fio_rod1'], data['fio_rod2'],
+                data['phone'], data['doc1'], data['doc2'], data['doc3']
+            ))
 
-        admin_id = os.getenv("ADMIN_ID")
-        if admin_id:
-            admin_id = int(admin_id)
-            text = (
-                f"Новая заявка:\n\n"
-                f"ФИО: {data['fio']}\n"
-                f"Адрес: {data['address']}\n"
-                f"Родственник 1: {data['fio_rod1']}\n"
-                f"Родственник 2: {data['fio_rod2']}\n"
-                f"Телефон: {data['phone']}"
-            )
-            await context.bot.send_message(chat_id=admin_id, text=text)
-            await context.bot.send_document(chat_id=admin_id, document=data['doc1'], caption="Удостоверение личности")
-            await context.bot.send_document(chat_id=admin_id, document=data['doc2'], caption="Справка ПНД")
-            await context.bot.send_document(chat_id=admin_id, document=data['doc3'], caption="Справка НД")
+        text = (
+            f"📥 Новая заявка:\n\n"
+            f"👤 ФИО: {data['fio']}\n"
+            f"🏠 Адрес: {data['address']}\n"
+            f"📞 Родственник 1: {data['fio_rod1']}\n"
+            f"📞 Родственник 2: {data['fio_rod2']}\n"
+            f"📱 Телефон: {data['phone']}"
+        )
 
-        await update.message.reply_text("Все документы получены. Заявка отправлена.")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text)
+        await context.bot.send_document(chat_id=ADMIN_ID, document=data['doc1'], caption="Удостоверение личности")
+        await context.bot.send_document(chat_id=ADMIN_ID, document=data['doc2'], caption="Справка ПНД")
+        await context.bot.send_document(chat_id=ADMIN_ID, document=data['doc3'], caption="Справка НД")
+
+        await update.message.reply_text("✅ Все документы получены. Заявка отправлена.")
         return ConversationHandler.END
 
-    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки из наркологического диспансера.")
+    await update.message.reply_text("Пожалуйста, отправьте PDF-файл справки НД.")
     return DOC3
 
-
-# Отмена
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Операция отменена.")
     return ConversationHandler.END
 
-
-# Запуск
+# Запуск бота
 if __name__ == '__main__':
     create_table()
-
-    TOKEN = os.getenv("BOT_TOKEN")
-    admin_id_env = os.getenv("ADMIN_ID")
-    if admin_id_env:
-        os.environ["ADMIN_ID"] = admin_id_env
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
