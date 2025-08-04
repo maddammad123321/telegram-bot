@@ -1,24 +1,31 @@
 from dotenv import load_dotenv
 import os
-import sqlite3
+import psycopg2
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
     ContextTypes, ConversationHandler
 )
 
-# Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# Состояния
 (FIO, ADDRESS, FIO_ROD1, FIO_ROD2, PHONE, DOC1, DOC2, DOC3) = range(8)
 
-# Создание таблицы SQLite
+def get_connection():
+    return psycopg2.connect(
+        host=os.getenv("PG_HOST"),
+        port=os.getenv("PG_PORT"),
+        user=os.getenv("PG_USER"),
+        password=os.getenv("PG_PASSWORD"),
+        dbname=os.getenv("PG_DATABASE")
+    )
+
 def create_table():
-    with sqlite3.connect("zayavki.db") as conn:
-        conn.execute('''
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            conn.execute('''
             CREATE TABLE IF NOT EXISTS zayavki (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER,
@@ -38,7 +45,6 @@ def clean_old_data(days=3):
     with sqlite3.connect("zayavki.db") as conn:
         conn.execute(f"DELETE FROM zayavki WHERE timestamp < datetime('now', '-{days} days')")
 
-# Обработчики шагов
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введите ваше ФИО:")
     return FIO
@@ -95,22 +101,24 @@ async def get_doc3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = context.user_data
         user_id = update.message.from_user.id
 
-        with sqlite3.connect("zayavki.db") as conn:
-            conn.execute('''
-                INSERT INTO zayavki (telegram_id, fio, address, fio_rod1, fio_rod2, phone, doc1, doc2, doc3)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                user_id, data['fio'], data['address'], data['fio_rod1'], data['fio_rod2'],
-                data['phone'], data['doc1'], data['doc2'], data['doc3']
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute('''
+                    INSERT INTO zayavki (telegram_id, fio, address, fio_rod1, fio_rod2, phone, doc1, doc2, doc3)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ''', (
+                    user_id, data['fio'], data['address'], data['fio_rod1'], data['fio_rod2'],
+                    data['phone'], data['doc1'], data['doc2'], data['doc3']
             ))
+        conn.commit()
 
         text = (
-            f"📥 Новая заявка:\n\n"
-            f"👤 ФИО: {data['fio']}\n"
-            f"🏠 Адрес: {data['address']}\n"
-            f"📞 Родственник 1: {data['fio_rod1']}\n"
-            f"📞 Родственник 2: {data['fio_rod2']}\n"
-            f"📱 Телефон: {data['phone']}"
+            f"Новая заявка:\n\n"
+            f"ФИО: {data['fio']}\n"
+            f"Адрес: {data['address']}\n"
+            f"Родственник 1: {data['fio_rod1']}\n"
+            f"Родственник 2: {data['fio_rod2']}\n"
+            f"Телефон: {data['phone']}"
         )
 
         await context.bot.send_message(chat_id=ADMIN_ID, text=text)
@@ -128,7 +136,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Операция отменена.")
     return ConversationHandler.END
 
-# Запуск бота
+def clean_old_data(days=1):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM zayavki WHERE timestamp < NOW() - INTERVAL '{days} days'")
+        conn.commit()
+
 if __name__ == '__main__':
     create_table()
     app = ApplicationBuilder().token(TOKEN).build()
